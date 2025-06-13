@@ -34,14 +34,20 @@ STATIC_DIR = "static"
 if not os.path.exists(STATIC_DIR):
     os.makedirs(STATIC_DIR)
 
-# 挂载静态文件
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
-# 注册路由
+# 注册API路由
 app.include_router(database_router, prefix=settings.API_V1_STR, tags=["database"])
 
+# 处理根路径请求
 @app.get("/")
 async def read_root():
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+# 处理所有其他静态文件请求
+@app.get("/{path:path}")
+async def serve_static(path: str):
+    static_path = os.path.join(STATIC_DIR, path)
+    if os.path.exists(static_path) and os.path.isfile(static_path):
+        return FileResponse(static_path)
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 @app.delete("/api/v1/delete-db/{db_path:path}")
