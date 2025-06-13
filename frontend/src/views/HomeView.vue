@@ -25,7 +25,6 @@
           </el-upload>
           
           <el-button 
-            v-if="currentDbPath" 
             type="danger" 
             size="large" 
             @click="handleDeleteDb"
@@ -195,7 +194,8 @@ export default defineComponent({
         const dbFileName = currentDbPath.value.split('/').pop()
         
         // 发送删除请求
-        await axios.delete(`/api/v1/delete-db/${dbFileName}`)
+        const targetDb = dbFileName || 'BaiduYunCacheFileV0.db'
+        await axios.delete(`/api/v1/delete-db/${targetDb}`)
         
         // 重置状态
         currentDbPath.value = ''
