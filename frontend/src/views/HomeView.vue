@@ -80,16 +80,75 @@
                 
                 <!-- Large files -->
                 <div v-show="activeTab === 'large'" class="tab-pane">
-                  <div class="empty-tab">
-                    <el-empty description="大文件列表功能开发中..." />
+                  <div class="table-header">
+                    <el-button 
+                      type="primary" 
+                      size="small" 
+                      @click="exportToCsv"
+                      :disabled="!largeFiles.length"
+                    >
+                      <el-icon class="el-icon--left"><Download /></el-icon>
+                      导出CSV
+                    </el-button>
                   </div>
+                  <el-table
+                    v-if="!largeFilesLoading && largeFiles.length > 0"
+                    :data="largeFiles"
+                    style="width: 100%"
+                    size="small"
+                    :default-sort="{ prop: 'size', order: 'descending' }"
+                  >
+                    <el-table-column prop="name" label="文件名" min-width="200" />
+                    <el-table-column prop="size" label="大小" min-width="120">
+                      <template #default="scope">
+                        {{ formatSize(scope.row.size) }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="parent_path" label="父路径" min-width="200" />
+                  </el-table>
+                  <el-empty v-else-if="!largeFilesLoading && largeFiles.length === 0" description="没有超过100M的大文件" />
+                  <el-empty v-else description="正在加载大文件列表..." />
                 </div>
                 
                 <!-- Duplicate files -->
                 <div v-show="activeTab === 'duplicate'" class="tab-pane">
-                  <div class="empty-tab">
-                    <el-empty description="重复文件功能开发中..." />
+                  <div class="table-header">
+                    <el-button 
+                      type="primary" 
+                      size="small" 
+                      @click="exportDuplicateToCsv"
+                      :disabled="!duplicateFiles.length"
+                    >
+                      <el-icon class="el-icon--left"><Download /></el-icon>
+                      导出CSV
+                    </el-button>
                   </div>
+                  <div v-if="!duplicateFilesLoading && duplicateFiles.length > 0" class="duplicate-files-container">
+                    <div v-for="group in duplicateFiles" :key="group.md5" class="duplicate-group">
+                      <div class="group-header">
+                        <span class="group-info">
+                          重复文件组 (共{{ group.count }}个文件，总大小: {{ formatSize(group.total_size) }})
+                        </span>
+                        <span class="group-md5">MD5: {{ group.md5 }}</span>
+                      </div>
+                      <el-table
+                        :data="group.files"
+                        style="width: 100%"
+                        size="small"
+                        :default-sort="{ prop: 'size', order: 'descending' }"
+                      >
+                        <el-table-column prop="name" label="文件名" min-width="200" />
+                        <el-table-column prop="size" label="大小" min-width="120">
+                          <template #default="scope">
+                            {{ formatSize(scope.row.size) }}
+                          </template>
+                        </el-table-column>
+                        <el-table-column prop="parent_path" label="父路径" min-width="200" />
+                      </el-table>
+                    </div>
+                  </div>
+                  <el-empty v-else-if="!duplicateFilesLoading && duplicateFiles.length === 0" description="没有发现重复文件" />
+                  <el-empty v-else description="正在检查重复文件..." />
                 </div>
               </div>
             </el-card>
@@ -105,9 +164,9 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, ref } from 'vue'
+import { defineComponent, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { QuestionFilled, Delete } from '@element-plus/icons-vue'
+import { QuestionFilled, Delete, Download } from '@element-plus/icons-vue'
 import FileTree from '@/components/FileTree.vue'
 import PieChart from '@/components/PieChart.vue'
 import StatusBar from '@/components/StatusBar.vue'
@@ -121,7 +180,8 @@ export default defineComponent({
     PieChart,
     StatusBar,
     QuestionFilled,
-    Delete
+    Delete,
+    Download
   },
   setup() {
     const fileTree = ref()
@@ -133,6 +193,10 @@ export default defineComponent({
     const currentFolder = ref({ name: '根目录', id: '0' })
     const activeTab = ref('size')  // 默认显示大小分布tab
     const currentDbPath = ref('')  // 添加当前数据库路径的引用
+    const largeFiles = ref<any[]>([])
+    const largeFilesLoading = ref(false)
+    const duplicateFiles = ref<any[]>([])
+    const duplicateFilesLoading = ref(false)
 
     const beforeUpload = (file: File) => {
       if (file.name !== 'BaiduYunCacheFileV0.db') {
@@ -256,6 +320,124 @@ export default defineComponent({
       }
     }
 
+    // 监听tab切换和当前节点变化，自动加载大文件
+    watch([activeTab, currentFolder], async ([tab, folder]) => {
+      if (tab === 'large' && folder && folder.id) {
+        largeFilesLoading.value = true
+        try {
+          const { data } = await axios.get(`/api/v1/large-files/${folder.id}`)
+          largeFiles.value = data
+        } catch (e) {
+          largeFiles.value = []
+          ElMessage.error('获取大文件列表失败')
+        } finally {
+          largeFilesLoading.value = false
+        }
+      }
+    }, { immediate: true })
+
+    // 监听tab切换和当前节点变化，自动加载重复文件
+    watch([activeTab, currentFolder], async ([tab, folder]) => {
+      if (tab === 'duplicate' && folder && folder.id) {
+        duplicateFilesLoading.value = true
+        try {
+          const { data } = await axios.get(`/api/v1/duplicate-files/${folder.id}`)
+          duplicateFiles.value = data
+        } catch (e) {
+          duplicateFiles.value = []
+          ElMessage.error('获取重复文件列表失败')
+        } finally {
+          duplicateFilesLoading.value = false
+        }
+      }
+    }, { immediate: true })
+
+    const exportToCsv = () => {
+      try {
+        // 准备CSV数据
+        const headers = ['文件名', '大小', '父路径']
+        const rows = largeFiles.value.map(file => [
+          file.name,
+          formatSize(file.size),
+          file.parent_path
+        ])
+        
+        // 添加表头
+        const csvContent = [
+          headers.join(','),
+          ...rows.map(row => row.join(','))
+        ].join('\n')
+        
+        // 创建Blob对象
+        const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' })
+        
+        // 创建下载链接
+        const link = document.createElement('a')
+        const url = URL.createObjectURL(blob)
+        link.setAttribute('href', url)
+        link.setAttribute('download', `大文件列表_${currentFolder.value.name}_${new Date().toLocaleDateString()}.csv`)
+        link.style.visibility = 'hidden'
+        
+        // 触发下载
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        
+        ElMessage.success('导出成功')
+      } catch (error) {
+        console.error('导出失败:', error)
+        ElMessage.error('导出失败')
+      }
+    }
+
+    const exportDuplicateToCsv = () => {
+      try {
+        // 准备CSV数据
+        const headers = ['MD5', '重复数量', '总大小', '文件名', '文件大小', '父路径']
+        const rows: string[][] = []
+        
+        // 处理每个重复文件组
+        duplicateFiles.value.forEach(group => {
+          group.files.forEach(file => {
+            rows.push([
+              group.md5,
+              group.count.toString(),
+              formatSize(group.total_size),
+              file.name,
+              formatSize(file.size),
+              file.parent_path
+            ])
+          })
+        })
+        
+        // 添加表头
+        const csvContent = [
+          headers.join(','),
+          ...rows.map(row => row.join(','))
+        ].join('\n')
+        
+        // 创建Blob对象
+        const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' })
+        
+        // 创建下载链接
+        const link = document.createElement('a')
+        const url = URL.createObjectURL(blob)
+        link.setAttribute('href', url)
+        link.setAttribute('download', `重复文件列表_${currentFolder.value.name}_${new Date().toLocaleDateString()}.csv`)
+        link.style.visibility = 'hidden'
+        
+        // 触发下载
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        
+        ElMessage.success('导出成功')
+      } catch (error) {
+        console.error('导出失败:', error)
+        ElMessage.error('导出失败')
+      }
+    }
+
     return {
       fileTree,
       pieChart,
@@ -272,7 +454,14 @@ export default defineComponent({
       handleNodeClick,
       handleSliceClick,
       handleSliceDoubleClick,
-      handleDeleteDb
+      handleDeleteDb,
+      largeFiles,
+      largeFilesLoading,
+      formatSize,
+      exportToCsv,
+      duplicateFiles,
+      duplicateFilesLoading,
+      exportDuplicateToCsv
     }
   }
 })
@@ -328,10 +517,18 @@ nav {
 .content-container {
   height: calc(100vh - 200px);
   min-height: 400px;
+  display: flex;
+  flex: 1;
+  overflow: hidden;
 }
 
 .chart-main {
   padding: 5px 20px !important;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .resizable-aside {
@@ -341,6 +538,7 @@ nav {
   resize: horizontal;
   overflow: hidden;
   padding: 0 20px 0 0;
+  flex-shrink: 0; /* 防止侧边栏被压缩 */
 }
 
 .resize-handle {
@@ -352,6 +550,7 @@ nav {
   background-color: #e6e6e6;
   cursor: col-resize;
   transition: background-color 0.3s;
+  z-index: 1; /* 确保调整手柄在最上层 */
 }
 
 .resize-handle:hover {
@@ -383,6 +582,17 @@ nav {
 
 .chart-card {
   height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+:deep(.chart-card .el-card__body) {
+  flex: 1;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .card-header {
@@ -398,10 +608,23 @@ nav {
 }
 
 .tab-content {
-  height: 100%;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .tab-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+:deep(.pie-chart-container) {
+  flex: 1;
+  width: 100%;
   height: 100%;
 }
 
@@ -426,5 +649,67 @@ nav {
 
 :deep(.el-icon--left) {
   margin-right: 5px;
+}
+
+:deep(.el-table) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+:deep(.el-table__body-wrapper) {
+  flex: 1;
+  overflow-y: auto !important;
+}
+
+:deep(.el-table__header-wrapper) {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: white;
+}
+
+:deep(.el-table__inner-wrapper) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.table-header {
+  margin-bottom: 10px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.duplicate-files-container {
+  height: 100%;
+  overflow-y: auto;
+  padding-right: 10px;
+}
+
+.duplicate-group {
+  margin-bottom: 20px;
+  border: 1px solid #ebeef5;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.group-header {
+  padding: 10px;
+  background-color: #f5f7fa;
+  border-bottom: 1px solid #ebeef5;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.group-info {
+  font-weight: bold;
+  color: #409EFF;
+}
+
+.group-md5 {
+  color: #909399;
+  font-size: 12px;
 }
 </style> 

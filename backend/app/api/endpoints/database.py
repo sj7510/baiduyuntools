@@ -95,4 +95,36 @@ async def get_directory_size(path: str) -> Dict:
         return size_info
     except Exception as e:
         logger.error(f"获取目录大小失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/large-files/{path:path}")
+async def get_large_files(path: str, min_size: int = 100 * 1024 * 1024) -> List[Dict]:
+    """获取指定节点下大文件列表，默认100M以上，按文件大小倒序"""
+    logger.info(f"获取大文件: {path}, min_size={min_size}")
+    if not current_db:
+        logger.error("未加载数据库")
+        raise HTTPException(status_code=400, detail="未加载数据库")
+    try:
+        db = SQLiteManager(current_db)
+        files = db.get_large_files(path, min_size)
+        logger.info(f"大文件数量: {len(files)}")
+        return files
+    except Exception as e:
+        logger.error(f"获取大文件失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/duplicate-files/{path:path}")
+async def get_duplicate_files(path: str, min_size: int = 10 * 1024 * 1024) -> List[Dict]:
+    """获取指定节点下重复文件列表，默认10M以上，按文件大小倒序"""
+    logger.info(f"获取重复文件: {path}, min_size={min_size}")
+    if not current_db:
+        logger.error("未加载数据库")
+        raise HTTPException(status_code=400, detail="未加载数据库")
+    try:
+        db = SQLiteManager(current_db)
+        files = db.get_duplicate_files(path, min_size)
+        logger.info(f"重复文件组数量: {len(files)}")
+        return files
+    except Exception as e:
+        logger.error(f"获取重复文件失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e)) 

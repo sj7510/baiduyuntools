@@ -122,3 +122,149 @@ class SQLiteManager:
         except sqlite3.Error as e:
             logger.error(f"数据库错误: {str(e)}")
             raise Exception(f"Database error: {str(e)}") 
+
+    def get_large_files(self, node_id: str, min_size: int = 100 * 1024 * 1024) -> List[Dict]:
+        """获取指定节点下大于min_size的所有文件，按文件大小倒序排列
+        Args:
+            node_id: 节点ID，根节点使用'0'或'/'
+            min_size: 最小文件大小，默认100M
+        Returns:
+            List[Dict]: 文件信息列表
+        """
+        logger.info(f"获取大文件，节点ID: {node_id}, 最小大小: {min_size}")
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            # 获取当前节点的parent_path和server_filename
+            if node_id in ['0', '/']:
+                parent_path = '/'
+            else:
+                cursor.execute("""
+                    SELECT parent_path, server_filename
+                    FROM cache_file
+                    WHERE id = ?
+                """, (node_id,))
+                result = cursor.fetchone()
+                if not result:
+                    raise Exception(f"Node not found: {node_id}")
+                parent_path, filename = result
+                parent_path = f"{parent_path}{filename}/"
+
+            # 查询该目录及其所有子目录下的大文件
+            query = """
+                SELECT id, server_filename, file_size, parent_path
+                FROM cache_file
+                WHERE isdir = 0
+                  AND parent_path LIKE ? || '%'
+                  AND file_size >= ?
+                ORDER BY file_size DESC
+            """
+            logger.info(f"执行查询: {query} with parent_path={parent_path}, min_size={min_size}")
+            cursor.execute(query, (parent_path, min_size))
+            items = cursor.fetchall()
+            logger.info(f"查询到 {len(items)} 个大文件")
+
+            files = []
+            for id, name, size, ppath in items:
+                files.append({
+                    "id": str(id),
+                    "name": name,
+                    "size": size,
+                    "parent_path": ppath
+                })
+
+            conn.close()
+            return files
+        except sqlite3.Error as e:
+            logger.error(f"数据库错误: {str(e)}")
+            raise Exception(f"Database error: {str(e)}") 
+
+    def get_duplicate_files(self, node_id: str, min_size: int = 10 * 1024 * 1024) -> List[Dict]:
+        """获取指定节点下重复的文件（md5相同）
+        
+        Args:
+            node_id: 节点ID，根节点使用'0'或'/'
+            min_size: 最小文件大小，默认10M
+            
+        Returns:
+            List[Dict]: 重复文件组列表，每组包含相同md5的文件
+        """
+        logger.info(f"获取重复文件，节点ID: {node_id}, 最小大小: {min_size}")
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            # 获取当前节点的parent_path
+            if node_id in ['0', '/']:
+                parent_path = '/'
+            else:
+                cursor.execute("""
+                    SELECT parent_path, server_filename
+                    FROM cache_file
+                    WHERE id = ?
+                """, (node_id,))
+                result = cursor.fetchone()
+                if not result:
+                    raise Exception(f"Node not found: {node_id}")
+                parent_path, filename = result
+                parent_path = f"{parent_path}{filename}/"
+
+            # 查询该目录及其所有子目录下的大文件，按md5分组
+            query = """
+                WITH duplicate_groups AS (
+                    SELECT md5, COUNT(*) as count, SUM(file_size) as total_size
+                    FROM cache_file
+                    WHERE isdir = 0
+                      AND parent_path LIKE ? || '%'
+                      AND file_size >= ?
+                      AND md5 IS NOT NULL
+                    GROUP BY md5
+                    HAVING COUNT(*) > 1
+                )
+                SELECT 
+                    f.id,
+                    f.server_filename,
+                    f.file_size,
+                    f.parent_path,
+                    f.md5,
+                    dg.count as duplicate_count,
+                    dg.total_size
+                FROM cache_file f
+                JOIN duplicate_groups dg ON f.md5 = dg.md5
+                WHERE f.parent_path LIKE ? || '%'
+                  AND f.file_size >= ?
+                ORDER BY f.file_size DESC, f.md5
+            """
+            
+            logger.info(f"执行查询: {query} with parent_path={parent_path}, min_size={min_size}")
+            cursor.execute(query, (parent_path, min_size, parent_path, min_size))
+            items = cursor.fetchall()
+            logger.info(f"查询到 {len(items)} 个重复文件")
+
+            # 按md5分组处理结果
+            groups = {}
+            for id, name, size, ppath, md5, count, total_size in items:
+                if md5 not in groups:
+                    groups[md5] = {
+                        "md5": md5,
+                        "count": count,
+                        "total_size": total_size,
+                        "files": []
+                    }
+                groups[md5]["files"].append({
+                    "id": str(id),
+                    "name": name,
+                    "size": size,
+                    "parent_path": ppath
+                })
+
+            # 转换为列表并按总大小排序
+            result = list(groups.values())
+            result.sort(key=lambda x: x["total_size"], reverse=True)
+
+            conn.close()
+            return result
+        except sqlite3.Error as e:
+            logger.error(f"数据库错误: {str(e)}")
+            raise Exception(f"Database error: {str(e)}") 
