@@ -1,2 +1,15 @@
 /backend/uploads/
 /frontend/.history/
+/backend/static/
+/dist/
+/build/
+/buildenv/
+/venv/
+/baiduyun-storage-report/
+/.trae-html-share-packages/
+/.idea/
+__pycache__/
+*.py[cod]
+*.log
+node_modules/
+.DS_Store

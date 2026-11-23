@@ -2,6 +2,7 @@ from pydantic_settings import BaseSettings
 from pydantic import Field
 from typing import List, Optional
 import os
+from .paths import upload_dir
 
 class Settings(BaseSettings):
     DATABASE_URL: str = Field(default="sqlite:///./test.db")
@@ -12,7 +13,7 @@ class Settings(BaseSettings):
     BACKEND_CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8080"]
     
     # 上传目录
-    UPLOAD_DIR: str = Field(default="./uploads")
+    UPLOAD_DIR: str = Field(default_factory=lambda: str(upload_dir()))
     
     class Config:
         env_file = ".env"

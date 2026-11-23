@@ -1,5 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query
-from typing import Dict, List
+from typing import Dict, List, Optional
 import os
 import shutil
 import logging
@@ -14,6 +14,20 @@ router = APIRouter()
 
 # 存储当前加载的数据库路径
 current_db: str = None
+
+
+def set_current_db(db_path: str) -> None:
+    global current_db
+    current_db = db_path
+
+
+def get_current_db() -> str:
+    return current_db
+
+
+def clear_current_db() -> None:
+    global current_db
+    current_db = None
 
 @router.post("/upload-db")
 async def upload_database(file: UploadFile = File(...)) -> Dict:
@@ -43,17 +57,28 @@ async def upload_database(file: UploadFile = File(...)) -> Dict:
         logger.error(f"保存文件失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"保存文件失败: {str(e)}")
     
-    current_db = file_path
-    logger.info(f"当前数据库设置为: {current_db}")
+    set_current_db(file_path)
+    logger.info(f"当前数据库设置为: {file_path}")
     return {"db_path": file_path}
 
 @router.get("/database-info")
-async def get_database_info(db_path: str = Query(..., description="数据库文件路径")) -> Dict:
-    """获取数据库信息"""
+async def get_database_info(db_path: Optional[str] = Query(None, description="数据库文件路径")) -> Dict:
+    """获取数据库信息；未指定路径时使用当前数据库或上传目录中最新的文件"""
+    if not db_path:
+        db_path = current_db
+    if not db_path:
+        db_files = [f for f in os.listdir(settings.UPLOAD_DIR) if f.endswith(".db")]
+        if not db_files:
+            raise HTTPException(status_code=404, detail="尚未加载数据库")
+        latest = max(db_files, key=lambda x: os.path.getmtime(os.path.join(settings.UPLOAD_DIR, x)))
+        db_path = os.path.join(settings.UPLOAD_DIR, latest)
+
     logger.info(f"获取数据库信息: {db_path}")
     try:
         db = SQLiteManager(db_path)
         info = db.get_database_info()
+        info["name"] = os.path.basename(db_path)
+        info["db_path"] = db_path
         logger.info(f"数据库信息: {info}")
         return info
     except Exception as e:

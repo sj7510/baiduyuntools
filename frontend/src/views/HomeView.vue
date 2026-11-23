@@ -23,6 +23,16 @@
           >
             <el-button type="primary" size="large">上传数据库</el-button>
           </el-upload>
+
+          <el-button
+            type="success"
+            size="large"
+            :loading="cacheSearching"
+            @click="openCacheDialog"
+          >
+            <el-icon class="el-icon--left"><Search /></el-icon>
+            一键查找缓存
+          </el-button>
           
           <el-button 
             type="danger" 
@@ -30,7 +40,7 @@
             @click="handleDeleteDb"
           >
             <el-icon class="el-icon--left"><Delete /></el-icon>
-            删除数据库
+            清除数据库
           </el-button>
           <router-link to="/about" class="help-link">
             <el-link type="primary">
@@ -39,6 +49,55 @@
             </el-link>
           </router-link>
         </div>
+
+        <el-dialog
+          v-model="cacheDialogVisible"
+          title="查找本机百度网盘缓存"
+          width="780px"
+          destroy-on-close
+        >
+          <div v-if="cacheSearching" class="cache-searching">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            正在扫描本机缓存目录，请稍候…
+          </div>
+          <el-empty
+            v-else-if="cacheResults.length === 0"
+            description="未找到可用的缓存数据库"
+          >
+            <p class="cache-tip">
+              请先安装并登录百度网盘客户端，确认客户端已同步文件后再重试。<br>
+              也可以手动上传缓存文件。
+            </p>
+          </el-empty>
+          <el-table v-else :data="cacheResults" size="small" style="width: 100%">
+            <el-table-column prop="name" label="文件名" width="160" />
+            <el-table-column prop="path" label="路径" min-width="240" show-overflow-tooltip />
+            <el-table-column label="类型" width="88">
+              <template #default="scope">
+                <el-tag :type="scope.row.kind === 'legacy' ? 'info' : 'success'" size="small">
+                  {{ scope.row.kind === 'legacy' ? '旧版' : '新版' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="大小" width="90">
+              <template #default="scope">{{ formatSize(scope.row.size) }}</template>
+            </el-table-column>
+            <el-table-column prop="modified" label="更新时间" width="132" />
+            <el-table-column label="操作" width="80" fixed="right">
+              <template #default="scope">
+                <el-button type="primary" size="small" @click="useCache(scope.row)">使用</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <template #footer>
+            <span class="cache-count" v-if="!cacheSearching">
+              已扫描 {{ cacheScanned }} 个候选文件，命中 {{ cacheResults.length }} 个
+            </span>
+            <el-button @click="searchCache" :loading="cacheSearching">重新扫描</el-button>
+            <el-button @click="cacheDialogVisible = false">关闭</el-button>
+          </template>
+        </el-dialog>
 
         <el-container class="content-container">
           <el-aside width="300px" class="resizable-aside">
@@ -166,7 +225,7 @@
 <script lang="ts">
 import { defineComponent, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { QuestionFilled, Delete, Download } from '@element-plus/icons-vue'
+import { QuestionFilled, Delete, Download, Search, Loading } from '@element-plus/icons-vue'
 import FileTree from '@/components/FileTree.vue'
 import PieChart from '@/components/PieChart.vue'
 import StatusBar from '@/components/StatusBar.vue'
@@ -181,7 +240,9 @@ export default defineComponent({
     StatusBar,
     QuestionFilled,
     Delete,
-    Download
+    Download,
+    Search,
+    Loading
   },
   setup() {
     const fileTree = ref()
@@ -197,10 +258,64 @@ export default defineComponent({
     const largeFilesLoading = ref(false)
     const duplicateFiles = ref<any[]>([])
     const duplicateFilesLoading = ref(false)
+    const cacheDialogVisible = ref(false)
+    const cacheSearching = ref(false)
+    const cacheResults = ref<any[]>([])
+    const cacheScanned = ref(0)
+
+    const activateDatabase = async (dbPath: string) => {
+      currentDbPath.value = dbPath
+      try {
+        await fileTree.value?.loadDatabase(dbPath)
+
+        const { data } = await axios.get(`/api/v1/directory-tree/0`)
+        pieChartData.value = data.children || []
+        if (pieChart.value) {
+          pieChart.value.updateChart(data.children || [])
+        }
+        currentFolder.value = { name: data.name, id: '0' }
+        statusMessage.value = `数据库加载成功，总大小: ${formatSize(data.value || 0)}`
+      } catch (error) {
+        console.error('加载根节点数据失败:', error)
+        ElMessage.error('加载根节点数据失败')
+      }
+    }
+
+    const searchCache = async () => {
+      cacheSearching.value = true
+      try {
+        const { data } = await axios.get('/api/v1/find-cache')
+        cacheResults.value = data.found || []
+        cacheScanned.value = data.scanned_files || 0
+      } catch (error: any) {
+        console.error('查找缓存失败:', error)
+        ElMessage.error(error.response?.data?.detail || '查找缓存失败')
+        cacheResults.value = []
+      } finally {
+        cacheSearching.value = false
+      }
+    }
+
+    const openCacheDialog = () => {
+      cacheDialogVisible.value = true
+      searchCache()
+    }
+
+    const useCache = async (row: any) => {
+      try {
+        const { data } = await axios.post('/api/v1/load-db', { path: row.path })
+        cacheDialogVisible.value = false
+        await activateDatabase(data.db_path)
+        ElMessage.success(`已加载缓存：${data.directory_count} 个文件夹、${data.file_count} 个文件`)
+      } catch (error: any) {
+        console.error('加载缓存失败:', error)
+        ElMessage.error(error.response?.data?.detail || '加载缓存失败')
+      }
+    }
 
     const beforeUpload = (file: File) => {
-      if (file.name !== 'BaiduYunCacheFileV0.db') {
-        ElMessage.error('只能上传 BaiduYunCacheFileV0.db 文件')
+      if (!file.name.toLowerCase().endsWith('.db')) {
+        ElMessage.error('只支持 .db 数据库文件')
         return false
       }
       return true
@@ -208,32 +323,8 @@ export default defineComponent({
 
     const handleUploadSuccess = async (response: any) => {
       console.log('文件上传成功:', response)
-      const dbPath = response.db_path
-      currentDbPath.value = dbPath  // 保存数据库路径
-      
-      try {
-        // 加载文件树
-        await fileTree.value?.loadDatabase(dbPath)
-        
-        // 手动触发根节点的数据加载
-        const { data } = await axios.get(`/api/v1/directory-tree/0`)
-        console.log('获取到根节点数据:', data)
-        
-        // 更新饼图数据
-        pieChartData.value = data.children || []
-        if (pieChart.value) {
-          pieChart.value.updateChart(data.children || [])
-        }
-        
-        // 更新当前文件夹信息
-        currentFolder.value = { name: data.name, id: '0' }
-        
-        // 更新状态栏
-        statusMessage.value = `数据库加载成功，总大小: ${formatSize(data.value || 0)}`
-      } catch (error) {
-        console.error('加载根节点数据失败:', error)
-        ElMessage.error('加载根节点数据失败')
-      }
+      ElMessage.success('数据库上传成功')
+      await activateDatabase(response.db_path)
     }
 
     const handleUploadError = (error: any) => {
@@ -245,8 +336,8 @@ export default defineComponent({
       try {
         // 显示确认对话框
         await ElMessageBox.confirm(
-          '确定要删除当前数据库吗？删除后需要重新上传数据库文件。',
-          '警告',
+          '确定要清除当前数据库吗？只会清除应用中加载的副本，不会删除百度网盘客户端的原始缓存文件。',
+          '提示',
           {
             confirmButtonText: '确定',
             cancelButtonText: '取消',
@@ -254,8 +345,8 @@ export default defineComponent({
           }
         )
 
-        // 获取文件名
-        const dbFileName = currentDbPath.value.split('/').pop()
+        // 获取文件名（兼容 Windows 与 Unix 路径分隔符）
+        const dbFileName = currentDbPath.value.split(/[\\/]/).pop()
         
         // 发送删除请求
         const targetDb = dbFileName || 'BaiduYunCacheFileV0.db'
@@ -270,9 +361,9 @@ export default defineComponent({
         if (fileTree.value) {
           fileTree.value.clearTree()
         }
-        statusMessage.value = '数据库已删除'
+        statusMessage.value = '数据库已清除'
         
-        ElMessage.success('数据库删除成功')
+        ElMessage.success('数据库已清除')
       } catch (error: any) {
         if (error === 'cancel') {
           return
@@ -461,7 +552,14 @@ export default defineComponent({
       exportToCsv,
       duplicateFiles,
       duplicateFilesLoading,
-      exportDuplicateToCsv
+      exportDuplicateToCsv,
+      cacheDialogVisible,
+      cacheSearching,
+      cacheResults,
+      cacheScanned,
+      openCacheDialog,
+      searchCache,
+      useCache
     }
   }
 })
@@ -488,6 +586,28 @@ export default defineComponent({
   justify-content: center;
   align-items: center;
   gap: 15px;
+}
+
+.cache-searching {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 36px 0;
+  color: #606266;
+}
+
+.cache-tip {
+  color: #909399;
+  font-size: 13px;
+  line-height: 1.8;
+  margin: 0;
+}
+
+.cache-count {
+  color: #909399;
+  font-size: 12px;
+  margin-right: 12px;
 }
 
 h1 {

@@ -1,4 +1,4 @@
-import sqlite3
+﻿import sqlite3
 from typing import List, Dict, Optional
 import os
 import logging
@@ -9,12 +9,26 @@ class SQLiteManager:
     def __init__(self, db_path: str):
         self.db_path = db_path
         logger.info(f"初始化SQLiteManager: {db_path}")
+
+    def _connect(self) -> sqlite3.Connection:
+        """连接数据库；新版客户端缓存使用 file_meta 表，映射为 cache_file"""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.create_collation("baidunetdisksort", lambda a, b: ((a or "") > (b or "")) - ((a or "") < (b or "")))
+            tables = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+            if 'cache_file' not in tables and 'file_meta' in tables:
+                conn.execute("CREATE TEMP VIEW cache_file AS SELECT * FROM file_meta")
+        except sqlite3.Error as e:
+            logger.warning(f"检查缓存表结构失败: {e}")
+        return conn
         
     def get_database_info(self) -> Dict:
         """获取数据库基本信息"""
         logger.info(f"获取数据库信息: {self.db_path}")
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._connect()
             cursor = conn.cursor()
             
             # 计算所有文件的总大小
@@ -53,7 +67,7 @@ class SQLiteManager:
         """
         logger.info(f"获取目录树，节点ID: {node_id}")
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._connect()
             cursor = conn.cursor()
             
             # 获取当前节点的parent_path和server_filename
@@ -133,7 +147,7 @@ class SQLiteManager:
         """
         logger.info(f"获取大文件，节点ID: {node_id}, 最小大小: {min_size}")
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._connect()
             cursor = conn.cursor()
 
             # 获取当前节点的parent_path和server_filename
@@ -192,7 +206,7 @@ class SQLiteManager:
         """
         logger.info(f"获取重复文件，节点ID: {node_id}, 最小大小: {min_size}")
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._connect()
             cursor = conn.cursor()
 
             # 获取当前节点的parent_path

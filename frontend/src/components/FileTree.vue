@@ -1,6 +1,7 @@
 <template>
   <div class="file-tree">
     <el-tree
+      v-if="treeData.length > 0"
       ref="tree"
       :data="treeData"
       :props="defaultProps"
